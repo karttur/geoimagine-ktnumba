@@ -6,8 +6,9 @@ Created on 19 Oct 2018
 import numba
 import numpy as np
 from math import sqrt
-from scipy import stats, interpolate
-from sympy.physics.quantum.gate import zx_basis_transform
+#from scipy import stats, interpolate
+
+
 
 def MKtestOld(x):  
     n = len(x)
@@ -33,6 +34,7 @@ def MKtestOld(x):
     elif s < 0:
         z = (s + 1)/np.sqrt(var_s)
     return z
+
 
 @numba.jit(nopython=True)
 def MKtestNumba(x,unique_x,dotp,tp):  
@@ -69,6 +71,25 @@ def MKtestIni(x):
 def ResampleToPeriodAvg(arr, y, step, nrperiods):
     for c in range(nrperiods):
         y[c] = arr[step*c:(c+1)*step].mean()       
+    return y
+
+@numba.jit(nopython=True)
+def ResampleToPeriodSum(arr, y, step, nrperiods):
+    for c in range(nrperiods):
+        y[c] = arr[step*c:(c+1)*step].sum()       
+    return y
+
+@numba.jit(nopython=True)
+def ResampleToDictPeriodAvg(arr, y, arrIO):
+    for c in arrIO:
+        y[c] = arr[arrIO[c]['start']:arrIO[c]['end']+1].mean()       
+    return y
+
+#@numba.jit(nopython=True)
+def ResampleToDictPeriodAvgNan(arr, y, nc):
+    for c in nc:
+        a = arr[c[1]:c[2]]
+        y[c[0]] = np.nanmean(a)    
     return y
 
 @numba.jit(nopython=True)
@@ -163,6 +184,27 @@ def Rmse_metricNumba(actual, predicted):
     mean_error = sum_error / float(len(actual))
     return sqrt(mean_error)
 
+@numba.jit(nopython=True)
+def PearsonNrNumba(x, y):
+    n = len(x)
+    #avg_x = average(x)
+    #avg_y = average(y)
+    avg_x = x.mean()
+    avg_y = y.mean()
+    diffprod = 0
+    xdiff2 = 0
+    ydiff2 = 0
+    for idx in range(n):
+        xdiff = x[idx] - avg_x
+        ydiff = y[idx] - avg_y
+        diffprod += xdiff * ydiff
+        xdiff2 += xdiff * xdiff
+        ydiff2 += ydiff * ydiff
+    xydiff2 = xdiff2 * ydiff2
+    if xydiff2 <= 0:
+        return 0
+    return diffprod / sqrt(xydiff2)
+
 def SsNumba(x):
     """Return sum of square deviations of sequence data."""
     c = np.mean(x)
@@ -247,6 +289,16 @@ def InterpolateLinearNaNNumba(arr):
     return arr
 
 @numba.jit(nopython=True)
+def InterpolateLinearFixedNaNNumba(y,x,steps,filled):
+    
+    for item in range(1,len(x)):
+        delta = float(y[item]-y[item-1]) / (x[item]-x[item-1])
+        filled[x[item-1]:x[item]] = [ y[item-1] + delta * z for z in range(steps[item-1]) ]
+    #set the last value
+    filled[x[item]] = y[item]
+    return filled
+
+@numba.jit(nopython=True)
 def InterpolateLinearNumba(y,x,steps,filled):
     for item in range(1,len(x)):
         delta = float(y[item]-y[item-1]) / (x[item]-x[item-1])
@@ -259,7 +311,7 @@ def InterpolateLinearNumba(y,x,steps,filled):
     return filled
 
 @numba.jit(nopython=True)
-def InterpolateLinearSeasonsNaN(arr,seasonArr,offset,seasons):
+def SeasonFill(arr,seasonArr):
     lastitem = arr.shape[0]
     for i in range(1,arr.shape[0]):  
         if np.isnan(arr[i]):   
@@ -267,10 +319,7 @@ def InterpolateLinearSeasonsNaN(arr,seasonArr,offset,seasons):
             postIndex = np.where(~np.isnan(postIndexArray))
             weight = 2.8/(postIndex[0][0]**2+3.0)
             w = 1-weight
-            s = i+offset+seasons
-            y = int(s/seasons)
-            t = i+seasons-(seasons*y)
-            arr[i] = (arr[i-1]+ (postIndexArray[postIndex[0][0]]*weight) + (seasonArr[t]*w)) / 2.0 
+            arr[i] = (arr[i-1]+ (postIndexArray[postIndex[0][0]]*weight) + (seasonArr[i]*w)) / 2.0 
     return arr
 
 ''' 
@@ -318,6 +367,15 @@ def interpolNan(A):
     return np.interp(indices, indices[not_nan], A[not_nan])
 
 @numba.jit(nopython=True)
+def InterpolatePeriodsLinear(y,x,steps,filled):
+    for item in range(1,len(x)):
+        delta = float(y[item]-y[item-1]) / (x[item]-x[item-1])
+        filled[x[item-1]:x[item]] = [ y[item-1] + delta * z for z in range(steps[item-1]) ]
+    #set the last value
+    filled[x[item]] = y[item]
+    return filled
+
+@numba.jit(nopython=True)
 def ResampleFixedPeriods(A,indexA,resultA):
     '''A is an array with daily values
     indexA is an array with the number of days in each consequtive month 
@@ -328,6 +386,8 @@ def ResampleFixedPeriods(A,indexA,resultA):
         end = indexA[m]
         resultA[m-1] = A[start:end].mean()
     return resultA
+
+
         
 '''    
 x = np.array([0,10,20,30,50,60,99,61])   
@@ -461,4 +521,16 @@ print slope, intercept, r_value, p_value, std_err
 
 r = OLSregr(ts)
 print r
+'''
+'''
+y = np.array([1,1])
+nc = [[0,0,5],[1,5,10]]
+arr = np.array([  0,   np.NaN,  np.NaN,  4. ,  np.NaN ,  5. ,  6. ,  7.  , np.NaN ,  10. , 10. , 11. , np.NaN , 13. , 14. , 15.])
+print (ResampleToDictPeriodAvgNan(arr, y, nc) )
+'''
+'''
+x = np.arange(10)
+y = np.arange(10)
+y = np.array([0,0,0,0,-1,1,2,3,4,5])
+print (PearsonNrNumba(x,y))
 '''
